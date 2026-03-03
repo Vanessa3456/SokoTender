@@ -1,8 +1,8 @@
-# 🌾 Soko Tender
+#  Soko Tender
 
 An enterprise-level e-procurement marketplace designed to bridge the gap between Kenyan public institutions (schools, hospitals) and local farmers/suppliers. Soko Tender digitizes the bidding process, ensuring transparency, speed, and strict adherence to the Public Procurement and Asset Disposal Act (PPADA).
 
-## 🚀 The Architecture
+## The Architecture
 Soko Tender operates on a Multi-Tenant architecture, delivering two distinct user experiences powered by a single real-time database:
 
 ### 1. The Institution Web Portal (For Procurement Officers)
@@ -18,7 +18,7 @@ Soko Tender operates on a Multi-Tenant architecture, delivering two distinct use
 * **Live Bidding System:** Submit secure, competitive bids directly to institutions.
 * **Real-Time Notifications:** Push-style architecture with live badge counters using WebSocket streams to alert farmers of new tenders, wins, and losses instantly.
 
-## 🛠️ Tech Stack
+##  Tech Stack
 * **Frontend:** Flutter (Mobile & Web)
 * **Backend:** Supabase
   * **Auth:** Secure Email/Password Authentication
@@ -26,9 +26,7 @@ Soko Tender operates on a Multi-Tenant architecture, delivering two distinct use
   * **Storage:** Cloud buckets for secure KYC document uploads.
   * **Realtime & Edge Functions:** Automated PostgreSQL triggers for cross-user notifications and status migrations.
 
-## 💡 Key Engineering Highlights
+##  Key Engineering Highlights
 * **Optimistic UI Updates:** UI updates instantly while performing secure background syncs.
 * **Complex State Management:** Handles fallback data for incomplete profiles and gracefully manages null-safety.
-* **Database Triggers:** Automates profile creation and broadcast notifications at the database level to reduce client-side workload.
-
-so you have said I should add these then commit
+* **Database Triggers:** Automates profile creation and broadcast notifications at the database lev
