@@ -3,11 +3,12 @@ import 'package:soko_tender/pages/auth.dart';
 import 'package:soko_tender/pages/auth_gate.dart';
 import 'package:soko_tender/pages/home_page.dart';
 import 'package:soko_tender/pages/onboarding.dart';
+import 'package:soko_tender/school/auth_gate.dart';
 import 'package:soko_tender/school/school_dashboard.dart';
 import 'package:soko_tender/school/verify_lpo_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:flutter/foundation.dart'; // <-- THIS GIVES US kIsWeb!
+import 'package:flutter/foundation.dart';
 
 void main() async {
   // Ensure Flutter is fully initialized before loading assets
@@ -38,7 +39,7 @@ class MyApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF5F5F5),
         useMaterial3: true,
       ),
-      // 👇 FIXED: Removed the accidental duplicate line here!
+      //  Removed the accidental duplicate line here!
       onGenerateRoute: (settings) {
         // 1. Check if the web URL starts with '/verify/'
         if (settings.name != null && settings.name!.startsWith('/verify/')) {
@@ -54,7 +55,7 @@ class MyApp extends StatelessWidget {
         // THE DEVICE SPLIT (Web vs Mobile) ---
         if (kIsWeb) {
           return MaterialPageRoute(
-            builder: (context) => const SchoolDashboardScreen(),
+            builder: (context) => const SchoolAuthGate(),
           );
         } else {
           return MaterialPageRoute(

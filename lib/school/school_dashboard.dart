@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:soko_tender/school/lpo_generator.dart';
+import 'package:soko_tender/school/school_login.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SchoolDashboardScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
   bool _isLoadingDashboard = true;
   List<Map<String, dynamic>> _activeTenders = [];
   int _completedOrdersCount = 0;
+  String _schoolName = 'Loading...';
 
   @override
   void initState() {
@@ -21,15 +23,47 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
     _fetchDashboardData();
   }
 
+  Future<void> _handleLogout() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const SchoolLoginScreen()),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Error logging out: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _fetchDashboardData() async {
     setState(() => _isLoadingDashboard = true);
     try {
       final supabase = Supabase.instance.client;
+
+      final user = supabase.auth.currentUser;
+
+      if (user == null) throw Exception('No user is logged in');
+
+      final profile = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+      final currentSchoolName = profile['full_name'] ?? 'Unknown Institution';
+
       // fetch tenders for this specific school and count the bids
       final response = await supabase
           .from('tenders')
-          .select('*,bids(id)')
-          .eq('institution_name', 'Moi Girls High School')
+          .select('*,bids(id, bid_amount)')
+          .eq('institution_name', currentSchoolName)
           .eq('status', 'open') // Only show active tenders on the dashboard
           .order('created_at', ascending: false);
 
@@ -37,11 +71,12 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
       final closedResponse = await supabase
           .from('tenders')
           .select('id')
-          .eq('institution_name', 'Moi Girls High School')
+          .eq('institution_name', currentSchoolName)
           .eq('status', 'closed');
 
       if (mounted) {
         setState(() {
+          _schoolName = currentSchoolName;
           _activeTenders = List<Map<String, dynamic>>.from(response);
           _completedOrdersCount = List.from(closedResponse).length;
           _isLoadingDashboard = false;
@@ -112,7 +147,7 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                   title: const Text('Log Out',
                       style: TextStyle(color: Colors.red)),
                   onTap: () {
-                    // TODO: Implement Logout
+                    _handleLogout();
                   },
                 ),
                 const SizedBox(height: 20),
@@ -151,11 +186,11 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                                 color: Color(0xFF2E7D32)),
                           ),
                           const SizedBox(width: 12),
-                          const Column(
+                          Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Moi Girls High School',
+                              Text(_schoolName,
                                   style:
                                       TextStyle(fontWeight: FontWeight.bold)),
                               Text('Procurement Office',
@@ -306,8 +341,7 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                             fontSize: 18, fontWeight: FontWeight.bold)),
                     ElevatedButton.icon(
                       onPressed: () {
-                        setState(() => _selectedIndex =
-                            1); // Jumps to the Post Tender screen!
+                        setState(() => _selectedIndex = 1);
                       },
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Post New'),
@@ -319,8 +353,6 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-
-                // Show a message if they haven't posted any tenders yet
                 if (_activeTenders.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(32.0),
@@ -338,22 +370,18 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                         DataColumn(label: Text('Item Needed')),
                         DataColumn(label: Text('Quantity')),
                         DataColumn(label: Text('Closing Date')),
-                        DataColumn(label: Text('Bids')),
+                        DataColumn(label: Text('Bids')), // Hidden prices!
                         DataColumn(label: Text('Status')),
                         DataColumn(label: Text('Action')),
                       ],
-                      // Dynamically generate the rows from Supabase data
                       rows: _activeTenders.map((tender) {
-                        // Format the date to look nice
                         final dateStr = tender['closing_date'] != null
                             ? tender['closing_date'].toString().split('T')[0]
                             : 'N/A';
 
-                        // Count the bids
                         final bidsCount =
                             (tender['bids'] as List?)?.length ?? 0;
 
-                        // Capitalize the status
                         final rawStatus = tender['status'] ?? 'open';
                         final status =
                             rawStatus[0].toUpperCase() + rawStatus.substring(1);
@@ -365,7 +393,7 @@ class _SchoolDashboardScreenState extends State<SchoolDashboardScreen> {
                             bidsCount.toString(),
                             status, () {
                           setState(() {
-                            _selectedIndex = 2; // Go to the Review Bids screen
+                            _selectedIndex = 2;
                           });
                         });
                       }).toList(),
@@ -482,6 +510,7 @@ class _PostTenderFormState extends State<PostTenderForm> {
 
   // The Date the school wants the tender to close
   DateTime _closingDate = DateTime.now().add(const Duration(days: 7));
+  DateTime _expectedDeliveryDate = DateTime.now().add(const Duration(days: 10)); // 🔥 NEW
 
   bool _isSubmitting = false;
 
@@ -495,15 +524,23 @@ class _PostTenderFormState extends State<PostTenderForm> {
 
     try {
       final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+
+      final profile = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user!.id)
+          .single();
 
       // Send the data to the 'tenders' table in Supabase!
       await supabase.from('tenders').insert({
-        'institution_name': 'Moi Girls High School', // Hardcoded for this demo
+        'institution_name': profile['full_name'], // Use the fetched school name
         'crop_name': _itemController.text.trim(),
         'category': _selectedCategory,
         'quantity': int.parse(_quantityController.text.trim()),
         'unit': _selectedUnit,
         'closing_date': _closingDate.toIso8601String(),
+        'expected_delivery_date': _expectedDeliveryDate.toIso8601String(),
         'status': 'open',
       });
 
@@ -606,37 +643,69 @@ class _PostTenderFormState extends State<PostTenderForm> {
               ),
               const SizedBox(height: 24),
 
-              // CLOSING DATE
-              const Text('Bidding Closing Date',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              const SizedBox(height: 8),
-              InkWell(
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _closingDate,
-                    firstDate: DateTime.now(),
-                    lastDate: DateTime.now().add(const Duration(days: 365)),
-                  );
-                  if (picked != null) setState(() => _closingDate = picked);
-                },
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(12),
+            // --- 🔥 DATES ROW (CLOSING & DELIVERY) ---
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Bidding Closing Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        const SizedBox(height: 8),
+                        InkWell(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: context, initialDate: _closingDate,
+                              firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if (picked != null) setState(() => _closingDate = picked);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.gavel, color: Colors.grey, size: 20),
+                                const SizedBox(width: 12),
+                                Text('${_closingDate.day}/${_closingDate.month}/${_closingDate.year}', style: const TextStyle(fontSize: 15)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.calendar_today, color: Colors.grey),
-                      const SizedBox(width: 12),
-                      Text(
-                          '${_closingDate.day}/${_closingDate.month}/${_closingDate.year}',
-                          style: const TextStyle(fontSize: 16)),
-                    ],
+                  const SizedBox(width: 20),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Expected Delivery Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF2E7D32))),
+                        const SizedBox(height: 8),
+                        InkWell(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: context, initialDate: _expectedDeliveryDate,
+                              firstDate: _closingDate, lastDate: DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if (picked != null) setState(() => _expectedDeliveryDate = picked);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            decoration: BoxDecoration(border: Border.all(color: const Color(0xFF2E7D32).withOpacity(0.5)), color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(12)),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.local_shipping, color: Color(0xFF2E7D32), size: 20),
+                                const SizedBox(width: 12),
+                                Text('${_expectedDeliveryDate.day}/${_expectedDeliveryDate.month}/${_expectedDeliveryDate.year}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2E7D32))),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ),
 
               const SizedBox(height: 40),
@@ -749,6 +818,7 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
   Map<String, dynamic>?
       _selectedTender; // If null, show list of tenders. If set, show bids.
   List<Map<String, dynamic>> _currentBids = [];
+  String _schoolName = '';
 
   @override
   void initState() {
@@ -763,10 +833,18 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
     });
     try {
       final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+      final profile = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user!.id)
+          .single();
+      _schoolName = profile['full_name'] ?? 'Unknown Institution';
+
       final response = await supabase
           .from('tenders')
           .select('*, bids(id)')
-          .eq('institution_name', 'Moi Girls High School')
+          .eq('institution_name', _schoolName)
           .eq('status', 'open') // Only show open tenders
           .order('created_at', ascending: false);
 
@@ -794,7 +872,7 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
       // We fetch the bids AND join the farmer's profile data to get their name
       final response = await supabase
           .from('bids')
-          .select('*, profiles:farmer_id(full_name, phone_number)')
+          .select('*, profiles:farmer_id(*)')
           .eq('tender_id', tender['id'])
           .order('bid_amount', ascending: true); // Show cheapest bids first!
       if (mounted) {
@@ -839,7 +917,7 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
         'farmer_id': winnerId,
         'title': 'Tender Won! 🎉',
         'message':
-            'Moi Girls High School accepted your bid of KES ${winningBid['bid_amount']} for ${_selectedTender!['crop_name']}. Please check your orders.',
+            '$_schoolName accepted your bid of KES ${winningBid['bid_amount']} for ${_selectedTender!['crop_name']}. Please check your orders.',
         'type': 'won'
       });
 
@@ -973,19 +1051,18 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
   }
 
   // --- VIEW 2: REVIEW SPECIFIC BIDS ---
+// --- VIEW 2: REVIEW SPECIFIC BIDS ---
   Widget _buildBidsList() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Back Button & Header
           Row(
             children: [
               IconButton(
                 icon: const Icon(Icons.arrow_back, color: Colors.black87),
-                onPressed: () =>
-                    setState(() => _selectedTender = null), // Go back
+                onPressed: () => setState(() => _selectedTender = null),
               ),
               const SizedBox(width: 8),
               Text('Reviewing bids for: ${_selectedTender!['crop_name']}',
@@ -994,7 +1071,6 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
             ],
           ),
           const SizedBox(height: 24),
-
           if (_currentBids.isEmpty)
             const Center(
                 child: Text('No bids have been placed yet.',
@@ -1017,41 +1093,71 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
                 headingTextStyle: const TextStyle(
                     fontWeight: FontWeight.bold, color: Colors.black54),
                 columns: const [
-                  DataColumn(label: Text('Farmer Name')),
-                  DataColumn(label: Text('Offer Price (KES)')),
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('Bid Date')), // 🔥 NEW
+                  DataColumn(label: Text('Offer (KES)')),
+                  DataColumn(label: Text('Compliance')), // 🔥 NEW
                   DataColumn(label: Text('Action')),
                 ],
                 rows: _currentBids.map((bid) {
-                  // Safely extract farmer name
-                  final farmerName =
-                      bid['profiles']?['full_name'] ?? 'Unknown Farmer';
+                  final farmer = bid['profiles'] ?? {};
+                  final farmerName = farmer['full_name'] ?? 'Unknown Farmer';
+
+                  // Format the bid date
+                  final bidDate = bid['created_at'] != null
+                      ? DateTime.parse(bid['created_at'])
+                          .toString()
+                          .substring(0, 16)
+                      : 'Unknown Date';
 
                   return DataRow(
                     cells: [
+                      // 🔥 FIX: Added constraints and Flexible to prevent text overflow!
                       DataCell(
-                        Row(
-                          children: [
-                            const CircleAvatar(
-                                radius: 16,
-                                backgroundColor: Color(0xFFE8F5E9),
-                                child: Icon(Icons.person,
-                                    size: 16, color: Color(0xFF2E7D32))),
-                            const SizedBox(width: 12),
-                            Text(farmerName,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold)),
-                          ],
+                        Container(
+                          constraints: const BoxConstraints(maxWidth: 160),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const CircleAvatar(
+                                  radius: 14,
+                                  backgroundColor: Color(0xFFE8F5E9),
+                                  child: Icon(Icons.person,
+                                      size: 14, color: Color(0xFF2E7D32))),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  farmerName,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow
+                                      .ellipsis, // Adds "..." if name is too long
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                      DataCell(Text(bidDate,
+                          style: const TextStyle(color: Colors.grey))),
                       DataCell(Text('KES ${bid['bid_amount']}',
                           style: const TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold))),
+                      DataCell(
+                        TextButton.icon(
+                          onPressed: () => _showFarmerKYCDialog(farmer),
+                          icon: const Icon(Icons.verified_user,
+                              size: 16, color: Colors.blue),
+                          label: const Text('View Profile',
+                              style: TextStyle(color: Colors.blue)),
+                        ),
+                      ),
                       DataCell(
                         ElevatedButton.icon(
                           onPressed: () =>
                               _showAcceptConfirmation(bid, farmerName),
                           icon: const Icon(Icons.check, size: 18),
-                          label: const Text('Accept Bid'),
+                          label: const Text('Award Contract'),
                           style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF2E7D32),
                               foregroundColor: Colors.white),
@@ -1063,6 +1169,243 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+// --- 🔥 THE UPGRADED KYC VERIFICATION DIALOG ---
+  void _showFarmerKYCDialog(Map<String, dynamic> farmer) {
+    // Pull the document URLs
+    final kraPinUrl = farmer['kra_certificate_url'];
+    final tccUrl = farmer['tcc_url'];
+
+    // Pull the text details
+    final location = farmer['home_county'] ??
+        farmer['farm_location'] ??
+        'Pending Verification';
+    final nationalId =
+        farmer['national_id'] ?? 'Not Provided'; // 🔥 Grab the ID string!
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: 500,
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Supplier Verification Dossier',
+                      style:
+                          TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context)),
+                ],
+              ),
+              const Divider(height: 30),
+
+              // 🔥 MOVED THE ID TO THE TEXT DETAILS SECTION
+              _buildKYCRow(Icons.person, 'Full Legal Name',
+                  farmer['full_name'] ?? 'N/A'),
+              _buildKYCRow(Icons.badge, 'National ID No.',
+                  nationalId), // Looks great right here!
+              _buildKYCRow(Icons.phone, 'Registered Phone',
+                  farmer['phone_number']?.toString() ?? 'N/A'),
+              _buildKYCRow(Icons.location_on, 'Location / County', location),
+
+              const SizedBox(height: 24),
+              const Text('Statutory Documents (PPADA Compliant)',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, color: Colors.grey)),
+              const SizedBox(height: 16),
+
+              // 🔥 ONLY ACTUAL FILES GO IN THE VIEWER NOW
+              _buildDocCheck('KRA PIN Certificate', kraPinUrl != null,
+                  () => _showDocumentViewer('KRA PIN Certificate', kraPinUrl)),
+              _buildDocCheck(
+                  'Tax Compliance Certificate (TCC)',
+                  tccUrl != null,
+                  () => _showDocumentViewer(
+                      'Tax Compliance Certificate', tccUrl)),
+
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey.shade200,
+                      foregroundColor: Colors.black87),
+                  child: const Text('Close Dossier'),
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- 🔥 THE REAL SECURE DOCUMENT VIEWER ---
+  void _showDocumentViewer(String documentTitle, String? documentUrl) {
+    // Safety check: Web can only load http/https URLs, not local phone file:/// paths
+    bool isValidUrl = documentUrl != null && documentUrl.startsWith('http');
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Container(
+          width: 600,
+          height: 650,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Viewing: $documentTitle',
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold)),
+                  IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context)),
+                ],
+              ),
+              const Divider(),
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: isValidUrl
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            documentUrl,
+                            fit: BoxFit.contain,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return const Center(
+                                  child: CircularProgressIndicator(
+                                      color: Color(0xFF2E7D32)));
+                            },
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Center(
+                              child: Text(
+                                  'Error loading image.\nMake sure your Supabase Bucket is public.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.redAccent)),
+                            ),
+                          ),
+                        )
+                      : Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.broken_image,
+                                    color: Colors.grey, size: 64),
+                                const SizedBox(height: 16),
+                                Text(
+                                  documentUrl != null && documentUrl.isNotEmpty
+                                      ? 'Cannot load image on Web.\n\nThe database has a local phone path instead of a cloud link:\n\n$documentUrl'
+                                      : 'No document link provided.',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: Colors.grey, height: 1.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download Copy'))
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper for the KYC Dialog
+  Widget _buildKYCRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.grey, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Text(label, style: const TextStyle(color: Colors.grey))),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  // 🔥 UPGRADED: Helper for Document Checklist
+  Widget _buildDocCheck(
+      String docName, bool isVerified, VoidCallback onViewDocument) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: isVerified ? Colors.green.shade50 : Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(8)),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+                child: Text(docName,
+                    style: const TextStyle(fontWeight: FontWeight.w600))),
+            if (isVerified)
+              TextButton.icon(
+                onPressed: onViewDocument,
+                icon: const Icon(Icons.visibility,
+                    size: 16, color: Color(0xFF2E7D32)),
+                label: const Text('View Document',
+                    style: TextStyle(
+                        color: Color(0xFF2E7D32),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12)),
+                style: TextButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(color: Colors.green.shade200))),
+              )
+            else
+              Row(
+                children: [
+                  const Icon(Icons.pending, color: Colors.orange, size: 18),
+                  const SizedBox(width: 6),
+                  const Text('Pending',
+                      style: TextStyle(
+                          color: Colors.orange,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12)),
+                ],
+              )
+          ],
+        ),
       ),
     );
   }
@@ -1099,6 +1442,9 @@ class _ReviewBidsViewState extends State<ReviewBidsView> {
 // ==========================================
 // THE "ORDER HISTORY" WIDGET
 // ==========================================
+// ==========================================
+// THE "ORDER HISTORY" WIDGET (WITH B2B DELIVERY CONFIRMATION)
+// ==========================================
 class OrderHistoryView extends StatefulWidget {
   const OrderHistoryView({super.key});
 
@@ -1110,6 +1456,8 @@ class _OrderHistoryViewState extends State<OrderHistoryView> {
   bool _isLoading = true;
   List<Map<String, dynamic>> _closedTenders = [];
 
+  String _schoolName = 'Unknown Institution';
+
   @override
   void initState() {
     super.initState();
@@ -1120,12 +1468,20 @@ class _OrderHistoryViewState extends State<OrderHistoryView> {
     setState(() => _isLoading = true);
     try {
       final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+      final profile = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user!.id)
+          .single();
+
+      _schoolName = profile['full_name'] ?? 'Unknown Institution';
 
       // Fetch closed tenders and pull in the bids + farmer profiles
       final response = await supabase
           .from('tenders')
           .select('*, bids(*, profiles(*))')
-          .eq('institution_name', 'Moi Girls High School')
+          .eq('institution_name', _schoolName)
           .eq('status', 'closed') // ONLY get the finished ones!
           .order('created_at', ascending: false);
 
@@ -1134,16 +1490,43 @@ class _OrderHistoryViewState extends State<OrderHistoryView> {
           _closedTenders = List<Map<String, dynamic>>.from(response);
           _isLoading = false;
         });
-
-        if (_closedTenders.isNotEmpty) {
-          debugPrint('====================================');
-          debugPrint('PRODUCE: ${_closedTenders[0]['crop_name']}');
-          debugPrint('RAW BIDS DATA: ${_closedTenders[0]['bids']}');
-          debugPrint('====================================');
-        }
       }
     } catch (e) {
       debugPrint('Error fetching order history: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // --- 🔥 NEW B2B FUNCTION: School Confirms Receipt ---
+  Future<void> _confirmDelivery(String bidId, String farmerId) async {
+    setState(() => _isLoading = true);
+    try {
+      final supabase = Supabase.instance.client;
+
+      // 1. Update Bid Status
+      await supabase
+          .from('bids')
+          .update({'status': 'delivered'}).eq('id', bidId);
+
+      // 2. Send a Notification to the Farmer!
+      await supabase.from('notifications').insert({
+        'farmer_id': farmerId,
+        'title': 'Delivery Verified ✅',
+        'message':
+            '$_schoolName has confirmed receipt of your goods. Payment processing initiated.',
+        'type': 'payment' // Use payment icon styling
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Goods Receipt Confirmed! Farmer notified.'),
+              backgroundColor: Color(0xFF2E7D32)),
+        );
+        _fetchOrderHistory(); // Refresh the table
+      }
+    } catch (e) {
+      debugPrint('Error confirming delivery: $e');
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -1159,24 +1542,17 @@ class _OrderHistoryViewState extends State<OrderHistoryView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Order History',
+          const Text('Order History & Deliveries',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(
-            height: 8,
-          ),
+          const SizedBox(height: 8),
           const Text(
-              'A complete record of all your accepted tenders and the winning farmers.',
+              'Track your accepted tenders, generate LPOs, and confirm goods receipt.',
               style: TextStyle(color: Colors.grey)),
-          const SizedBox(
-            height: 24,
-          ),
+          const SizedBox(height: 24),
           if (_closedTenders.isEmpty)
             const Center(
-              child: Text(
-                'You have no completed orders yet.',
-                style: TextStyle(color: Colors.grey),
-              ),
-            )
+                child: Text('You have no completed orders yet.',
+                    style: TextStyle(color: Colors.grey)))
           else
             Container(
               width: double.infinity,
@@ -1204,83 +1580,111 @@ class _OrderHistoryViewState extends State<OrderHistoryView> {
                   rows: _closedTenders.map((tender) {
                     final bids = tender['bids'] as List<dynamic>? ?? [];
                     Map<String, dynamic>? winningBid;
+
                     for (var currentBid in bids) {
+                      // Grab ANY successful state to show in this table
                       if (currentBid['status'] == 'won' ||
-                          currentBid['status'] == 'accepted') {
+                          currentBid['status'] == 'accepted' ||
+                          currentBid['status'] == 'delivered') {
                         winningBid = currentBid as Map<String, dynamic>;
                         break;
                       }
                     }
 
-                    // fall back text just in case data is missing
                     String farmerName = 'Unknown';
                     String price = 'N/A';
+                    String bidStatus = 'unknown';
+                    String bidId = '';
+                    String farmerId = '';
+                    String phone = 'N/A';
 
                     if (winningBid != null) {
                       price = 'KES ${winningBid['bid_amount']}';
+                      bidStatus = winningBid['status'] ?? 'unknown';
+                      bidId = winningBid['id'];
+                      farmerId = winningBid['farmer_id'];
+
                       if (winningBid['profiles'] != null) {
                         farmerName = winningBid['profiles']['full_name'] ??
                             'Unknown Farmer';
+                        phone = winningBid['profiles']['phone_number']
+                                ?.toString() ??
+                            'N/A';
                       }
                     }
 
                     return DataRow(
                       cells: [
-                        DataCell(Text(
-                          tender['crop_name'] ?? 'Unknown',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        )),
+                        DataCell(Text(tender['crop_name'] ?? 'Unknown',
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold))),
                         DataCell(Text(
                             '${tender['quantity']} ${tender['unit'] ?? ''}')),
                         DataCell(Row(
                           children: [
-                            const Icon(
-                              Icons.verified_user,
-                              color: Color(0xFF2E7D32),
-                              size: 16,
-                            ),
-                            const SizedBox(
-                              width: 8,
-                            ),
+                            const Icon(Icons.verified_user,
+                                color: Color(0xFF2E7D32), size: 16),
+                            const SizedBox(width: 8),
                             Text(farmerName),
                           ],
                         )),
-                        DataCell(Text(
-                          price,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        )),
-                        // Replace the 'Completed' DataCell with this:
-                        DataCell(
-                          ElevatedButton.icon(
-                            onPressed: () {
-                              // Extract the farmer's phone number safely
-                              String phone = 'N/A';
-                              if (winningBid != null &&
-                                  winningBid['profiles'] != null) {
-                                phone = winningBid['profiles']['phone_number']
-                                        ?.toString() ??
-                                    'N/A';
-                              }
+                        DataCell(Text(price,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold))),
 
-                              // Trigger the PDF!
-                              LpoGenerator.generateAndPrintLPO(
-                                schoolName: 'Moi Girls High School',
-                                farmerName: farmerName,
-                                farmerPhone: phone,
-                                cropName: tender['crop_name'] ?? 'Unknown',
-                                quantity:
-                                    '${tender['quantity']} ${tender['unit'] ?? ''}',
-                                price: price.replaceAll('KES ',
-                                    ''), // Clean up the string for the PDF
-                                tenderId: tender['id'].toString(),
-                              );
-                            },
-                            icon: const Icon(Icons.picture_as_pdf, size: 16),
-                            label: const Text('Generate LPO'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2E7D32),
-                              foregroundColor: Colors.white,
-                            ),
+                        // 🔥 THE NEW ACTION COLUMN
+                        DataCell(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // 1. PDF GENERATOR
+                           // 1. PDF GENERATOR
+                              IconButton(
+                                tooltip: 'Print LPO',
+                                onPressed: () {
+                                  // 🔥 GRAB THE REAL DATE FROM DB
+                                  final rawDate = tender['expected_delivery_date'];
+                                  final deliveryDate = rawDate != null ? DateTime.parse(rawDate) : DateTime.now().add(const Duration(days: 3));
+                                  final formattedDate = "${deliveryDate.day}/${deliveryDate.month}/${deliveryDate.year}";
+
+                                  LpoGenerator.generateAndPrintLPO(
+                                    schoolName: _schoolName, farmerName: farmerName, farmerPhone: phone,
+                                    cropName: tender['crop_name'] ?? 'Unknown',
+                                    quantity: '${tender['quantity']} ${tender['unit'] ?? ''}',
+                                    price: price.replaceAll('KES ', ''), tenderId: tender['id'].toString(),
+                                    deliveryDate: 'Before 9:00 AM on $formattedDate', // 🔥 PASS IT IN!
+                                  );
+                                },
+                                icon: const Icon(Icons.picture_as_pdf, color: Colors.redAccent),
+                              ),
+                              const SizedBox(width: 8),
+
+                              // 2. DYNAMIC DELIVERY BUTTON
+                              if (bidStatus == 'won' || bidStatus == 'accepted')
+                                ElevatedButton.icon(
+                                  onPressed: () =>
+                                      _confirmDelivery(bidId, farmerId),
+                                  icon: const Icon(Icons.check_box, size: 16),
+                                  label: const Text('Confirm Receipt'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.orange.shade600,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                )
+                              else if (bidStatus == 'delivered')
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                      color: Colors.green.shade50,
+                                      borderRadius: BorderRadius.circular(8)),
+                                  child: const Text('Goods Received',
+                                      style: TextStyle(
+                                          color: Color(0xFF2E7D32),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12)),
+                                )
+                            ],
                           ),
                         ),
                       ],

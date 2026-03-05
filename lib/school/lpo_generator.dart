@@ -11,6 +11,7 @@ class LpoGenerator {
     required String quantity,
     required String price,
     required String tenderId,
+    required String deliveryDate, // 🔥 ADDED THIS LINE
   }) async {
     final pdf = pw.Document();
 
@@ -41,15 +42,14 @@ class LpoGenerator {
                                 fontSize: 10, color: PdfColors.grey700)),
                       ]),
 
-                  // 🔥 THE MASSIVE FLEX 1: THE QR CODE 🔥
+                  // THE QR CODE
                   pw.Container(
                     padding: const pw.EdgeInsets.all(4),
                     decoration: pw.BoxDecoration(
                         border: pw.Border.all(color: PdfColors.grey300)),
                     child: pw.BarcodeWidget(
                       barcode: pw.Barcode.qrCode(),
-                      data:
-                          'https://sokotender.co.ke/verify/$tenderId', // This is what the guard's phone reads!
+                      data: 'https://sokotender.co.ke/verify/$tenderId', 
                       width: 60,
                       height: 60,
                     ),
@@ -81,7 +81,7 @@ class LpoGenerator {
                           style: pw.TextStyle(
                               fontWeight: pw.FontWeight.bold, fontSize: 14)),
                       pw.Text(
-                          'Date: ${DateTime.now().toString().split(' ')[0]}'),
+                          'Issue Date: ${DateTime.now().toString().split(' ')[0]}'),
                     ],
                   ),
                 ],
@@ -113,11 +113,28 @@ class LpoGenerator {
               ),
               pw.SizedBox(height: 30),
 
-              // --- 4. THE ORDER TABLE ---
+              // --- 4. THE ORDER TABLE & DELIVERY DATE ---
               pw.Text(
                   'Please supply the following goods as per the agreed tender terms:',
                   style: const pw.TextStyle(color: PdfColors.grey800)),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 8),
+              
+              // 🔥 THE NEW DELIVERY DATE DISPLAY 🔥
+              pw.Container(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: pw.BoxDecoration(
+                  color: PdfColors.red50,
+                  border: pw.Border.all(color: PdfColors.red200)
+                ),
+                child: pw.Row(
+                  children: [
+                    pw.Text('REQUIRED DELIVERY DATE: ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red900, fontSize: 12)),
+                    pw.Text(deliveryDate, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.red900, fontSize: 12)),
+                  ]
+                )
+              ),
+              pw.SizedBox(height: 12),
+
               pw.Table.fromTextArray(
                 headers: [
                   'Item Description',
@@ -165,12 +182,11 @@ class LpoGenerator {
                         ],
                       ),
 
-                      // 🔥 THE MASSIVE FLEX 2: THE DIGITAL RED STAMP 🔥
+                      // THE DIGITAL RED STAMP
                       pw.Positioned(
                         top: 0,
                         child: pw.Transform.rotate(
-                          angle:
-                              -0.15, // Tilts the stamp slightly so it looks real!
+                          angle: -0.15, // Tilts the stamp slightly
                           child: pw.Container(
                               padding: const pw.EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 8),
